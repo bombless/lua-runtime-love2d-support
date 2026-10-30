@@ -1,0 +1,14 @@
+.tools/
+.gradle/
+**/build/
+**/local.properties
+*.log
+*.apk
+*.aab
+.tools/
+dist/
+.gradle/
+**/build/
+**/local.properties
+*.apk
+*.aab
