@@ -60,7 +60,11 @@ import android.content.pm.PackageManager;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
-import com.bombless.luaandroid.ipc.ILuaRuntimeService;
+import com.bombless.luaandroid.ipc.v2.IProtocolBootstrap;
+import com.bombless.luaandroid.ipc.v2.ISession;
+import com.bombless.luaandroid.ipc.v2.ClientHello;
+import com.bombless.luaandroid.ipc.v2.ProtocolInfo;
+import com.bombless.luaandroid.ipc.v2.SessionInfo;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -70,8 +74,8 @@ import androidx.core.app.ActivityCompat;
 
 public class GameActivity extends SDLActivity {
     private static final String RUNTIME_PACKAGE = "com.bombless.luaandroid";
-    private static final String RUNTIME_ACTION = "com.bombless.luaandroid.action.BIND_RUNTIME";
-    private static final int RUNTIME_API_VERSION = 1;
+    private static final String RUNTIME_ACTION = "com.bombless.luaandroid.action.BIND_RUNTIME_V2";
+    private static final int RUNTIME_PROTOCOL_MAJOR = 2;
     private static DisplayMetrics metrics = null;
     private static String gamePath = "";
     private static Vibrator vibrator = null;
@@ -89,7 +93,7 @@ public class GameActivity extends SDLActivity {
     public int safeAreaBottom = 0;
     public int safeAreaRight = 0;
     private TextView bridgeStatusView;
-    private ILuaRuntimeService runtimeService;
+    private IProtocolBootstrap runtimeService;
     private boolean runtimeBound = false;
     private final Handler bridgeMainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService bridgeExecutor = Executors.newSingleThreadExecutor();
@@ -98,21 +102,28 @@ public class GameActivity extends SDLActivity {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             bridgeMainHandler.removeCallbacks(bridgeConnectionTimeout);
-            runtimeService = ILuaRuntimeService.Stub.asInterface(service);
+            runtimeService = IProtocolBootstrap.Stub.asInterface(service);
             updateBridgeStatus("Lua Runtime: connected · checking API…");
-            final ILuaRuntimeService connectedService = runtimeService;
+            final IProtocolBootstrap connectedService = runtimeService;
             bridgeExecutor.execute(() -> {
                 try {
-                    int apiVersion = connectedService.getApiVersion();
-                    String runtimeInfo = connectedService.getRuntimeInfo();
+                    ProtocolInfo protocolInfo = connectedService.getProtocolInfo();
+                    if (!"com.bombless.luaandroid.ipc.v2".equals(protocolInfo.namespace)
+                            || protocolInfo.protocolMajor != RUNTIME_PROTOCOL_MAJOR) {
+                        throw new IllegalStateException("Incompatible protocol major: " + protocolInfo.protocolMajor);
+                    }
+                    ClientHello hello = new ClientHello();
+                    hello.clientVersion = "love2d-runtime-bridge";
+                    hello.buildId = "companion";
+                    hello.nonce = java.util.UUID.randomUUID().toString();
+                    ISession session = connectedService.openSession(hello);
+                    SessionInfo sessionInfo = session.getSessionInfo();
+                    int capabilityCount = session.getCapabilities().size();
                     bridgeMainHandler.post(() -> {
                         if (runtimeService == connectedService) {
-                            if (apiVersion != RUNTIME_API_VERSION) {
-                                updateBridgeStatus("Lua Runtime: incompatible API " + apiVersion
-                                        + " · expected " + RUNTIME_API_VERSION);
-                            } else {
-                                updateBridgeStatus("Lua Runtime: connected · API " + apiVersion + "\n" + runtimeInfo);
-                            }
+                            updateBridgeStatus("Lua Runtime: v" + protocolInfo.protocolMajor + "." + protocolInfo.protocolMinor
+                                    + " · session " + sessionInfo.sessionId.substring(0, 8)
+                                    + " · capabilities " + capabilityCount);
                         }
                     });
                 } catch (RemoteException | RuntimeException error) {
@@ -297,7 +308,7 @@ public class GameActivity extends SDLActivity {
 
         Intent intent = new Intent(RUNTIME_ACTION).setComponent(new ComponentName(
                 RUNTIME_PACKAGE,
-                "com.bombless.luaandroid.ipc.LuaRuntimeService"));
+                "com.bombless.luaandroid.ipc.v2.RuntimeV2Service"));
         try {
             runtimeBound = bindService(intent, runtimeConnection, Context.BIND_AUTO_CREATE);
             if (!runtimeBound) {

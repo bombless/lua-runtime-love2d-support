@@ -1,0 +1,6 @@
+package com.bombless.luaandroid.ipc.v2;
+import android.os.Parcel; import android.os.Parcelable;
+public final class ClientHello implements Parcelable {
+ public String clientVersion="",buildId="",nonce=""; public int minProtocolMajor=2,maxProtocolMajor=2,minProtocolMinor=0,maxProtocolMinor=0; public String[] requestedCapabilities=new String[0]; public ClientHello(){} private ClientHello(Parcel p){clientVersion=p.readString();buildId=p.readString();minProtocolMajor=p.readInt();maxProtocolMajor=p.readInt();minProtocolMinor=p.readInt();maxProtocolMinor=p.readInt();requestedCapabilities=p.createStringArray();nonce=p.readString();}
+ public void writeToParcel(Parcel p,int f){p.writeString(clientVersion);p.writeString(buildId);p.writeInt(minProtocolMajor);p.writeInt(maxProtocolMajor);p.writeInt(minProtocolMinor);p.writeInt(maxProtocolMinor);p.writeStringArray(requestedCapabilities);p.writeString(nonce);} public int describeContents(){return 0;} public static final Creator<ClientHello> CREATOR=new Creator<ClientHello>(){public ClientHello createFromParcel(Parcel p){return new ClientHello(p);}public ClientHello[] newArray(int n){return new ClientHello[n];}};
+}

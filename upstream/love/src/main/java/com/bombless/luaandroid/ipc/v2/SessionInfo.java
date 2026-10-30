@@ -1,0 +1,3 @@
+package com.bombless.luaandroid.ipc.v2;
+import android.os.Parcel; import android.os.Parcelable;
+public final class SessionInfo implements Parcelable {public String sessionId="";public long expiresAtMillis;public String[] grantedScopes=new String[0];public SessionInfo(){}private SessionInfo(Parcel p){sessionId=p.readString();expiresAtMillis=p.readLong();grantedScopes=p.createStringArray();}public void writeToParcel(Parcel p,int f){p.writeString(sessionId);p.writeLong(expiresAtMillis);p.writeStringArray(grantedScopes);}public int describeContents(){return 0;}public static final Creator<SessionInfo> CREATOR=new Creator<SessionInfo>(){public SessionInfo createFromParcel(Parcel p){return new SessionInfo(p);}public SessionInfo[] newArray(int n){return new SessionInfo[n];}};}
