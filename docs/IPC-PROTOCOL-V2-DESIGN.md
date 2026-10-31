@@ -1,6 +1,6 @@
 # IPC Protocol v2 — Design Proposal
 
-- Status: Draft for review; not implemented.
+- Status: Phase A bootstrap and DTO wire contract frozen (v2.0); later service capabilities remain unimplemented.
 - Date: 2026-10-31
 - Scope: coordinated changes to ipc-android (generic Runtime server) and love2d-runtime-bridge (LÖVE Companion client).
 - Compatibility: no legacy external client is currently in scope. Prefer a clean v2 contract over preserving accidental v1 API shape.
@@ -176,3 +176,118 @@ Defer package installation until resolver, provenance, dependency, and rollback 
 7. Add honest package catalog metadata and compatibility classification.
 8. Implement Companion client against the frozen v2 contract.
 9. Add contract, hostile-input, Binder-size, process-death, and two-app integration tests.
+
+## 14. Phase A frozen wire contract (2026-10-31)
+
+This section freezes the v2 bootstrap and base DTO wire representation. It does not claim
+that jobs, transfers, pairing, events, or package operations are implemented. Both
+projects must change together for any future wire-contract revision.
+
+### 14.1 Serialization and nullability
+
+- Parcelable fields are serialized in the exact order listed below. Do not reorder or
+  repurpose fields within protocol major 2.
+- Strings are non-null on the wire. A missing optional string is represented by the empty
+  string; detailsJson and limitsJson default to an empty JSON object.
+- String arrays and typed lists are non-null; absence is represented by an empty array/list.
+- retryAfterMillis = 0 means no retry delay is supplied. retryable is encoded as integer
+  0 or 1 in Parcel.
+- Unknown optional capabilities are ignored by clients. An operation requiring one must
+  fail with protocol/UNSUPPORTED_CAPABILITY.
+- ProtocolInfo.supportedCapabilities describes capabilities implemented by the server.
+  ISession.getCapabilities() returns the subset granted to that session. Both remain empty
+  until an implementation is available and authorized.
+
+### 14.2 Frozen Parcelable fields and order
+
+| DTO | Parcel field order |
+|---|---|
+| ProtocolInfo | namespace:String, protocolMajor:Int, protocolMinor:Int, runtimeId:String, runtimeVersion:String, serviceVersion:String, buildId:String, engineId:String, engineVersion:String, luaLanguageVersion:String, luaAbi:String, maxMetadataBytes:Int, maxTransferBytes:Long, maxInputCount:Int, maxConcurrency:Int, maxQueueDepth:Int, maxExecutionMillis:Long, maxOutputBytes:Long, maxEventBatchSize:Int, supportedCapabilities:List<CapabilityInfo> |
+| ClientHello | clientVersion:String, buildId:String, minProtocolMajor:Int, maxProtocolMajor:Int, minProtocolMinor:Int, maxProtocolMinor:Int, requestedCapabilities:String[], nonce:String |
+| SessionInfo | sessionId:String, expiresAtMillis:Long, grantedScopes:String[] |
+| CapabilityInfo | id:String, schemaVersion:Int, limitsJson:String |
+| ErrorInfo | domain:String, code:String, safeMessage:String, retryable:Boolean, fieldPath:String, detailsJson:String, retryAfterMillis:Long, correlationId:String |
+
+limitsJson and detailsJson are UTF-8 JSON objects, not arbitrary Bundle values.
+Capability IDs are stable lowercase identifiers ending in a version suffix, for example
+runtime.info.v1; schema versions are positive integers. Descriptors include only concrete
+implemented limits. Planned capabilities must not be published.
+
+### 14.3 Bounds and defaults
+
+- namespace is exactly com.bombless.luaandroid.ipc.v2; the current server version is
+  major 2, minor 0.
+- clientVersion and buildId: at most 128 UTF-8 bytes each.
+- nonce: 16–128 UTF-8 bytes. It is request correlation material, not authentication and
+  does not prevent replay by itself.
+- requestedCapabilities: at most 64 entries; each ID is 1–128 UTF-8 bytes.
+- supportedCapabilities and grantedScopes: at most 64 entries; each ID/scope is
+  1–128 UTF-8 bytes. Empty means none.
+- runtimeId, version/build metadata, engine metadata, sessionId, and correlationId:
+  at most 128 UTF-8 bytes when present.
+- maxMetadataBytes is a server-advertised hard ceiling and cannot exceed 65,536.
+  All other numeric limits are non-negative. A zero limit means unavailable, not unlimited.
+- CapabilityInfo.limitsJson: at most 4,096 UTF-8 bytes.
+- ErrorInfo.domain and code: 1–128 UTF-8 bytes; safeMessage: at most 512;
+  fieldPath: at most 256; detailsJson: at most 4,096; correlationId: at most 128.
+  retryAfterMillis is non-negative. Details must be bounded, non-sensitive JSON and must
+  never contain stack traces, private paths, tokens, or secrets.
+
+### 14.4 Capability identifiers and initial advertisement
+
+The initial release may advertise only runtime.info.v1 and runtime.capabilities.v1.
+These describe read-only runtime metadata and capability discovery. They must not be
+advertised until corresponding read methods and authorization behavior are implemented.
+Since the current bootstrap has no scope grant or explicit pairing, current supported and
+session capability lists remain empty.
+
+The following are reserved planned identifiers and must remain unadvertised until their
+complete implementation and tests exist: jobs.submit.v1, jobs.query.v1, jobs.cancel.v1,
+jobs.events.v1, transfers.upload.v1, artifacts.download.v1, packages.catalog.read.v1,
+and packages.details.read.v1.
+
+### 14.5 Structured error contract
+
+ErrorInfo is the stable error payload for future typed operation results. Domains are
+protocol, auth, transfer, jobs, packages, and internal. The code is a stable uppercase
+identifier within its domain. Initial code families are listed in Section 8.
+safeMessage is user-safe and non-authoritative; clients branch on domain/code, never on
+message text. Optional fieldPath identifies rejected input. detailsJson is a bounded
+object containing only safe machine-readable context. Correlation IDs are opaque and are
+not credentials.
+
+The existing bootstrap still reports failures through Binder exceptions; adding a typed
+error result to future operation APIs is required before those APIs ship. ErrorInfo being
+Parcelable alone does not mean all current exceptions have been converted.
+
+### 14.6 Version negotiation and canonical Job states
+
+- The server advertises one protocol major/minor pair. A client range is compatible only
+  when it contains the server major and at least one minor supported by that major.
+- A major mismatch rejects session establishment. Within a major, the server selects the
+  highest mutually supported minor. New minor versions may add optional fields and
+  capabilities; they must not change existing field meaning or order.
+- Unknown optional fields/capabilities are ignored. Required unsupported capabilities
+  fail explicitly with protocol/UNSUPPORTED_CAPABILITY.
+- Canonical Job states are ACCEPTED, QUEUED, STARTING, RUNNING, CANCEL_REQUESTED,
+  SUCCEEDED, FAILED, CANCELLED, TIMED_OUT, REJECTED, and INTERRUPTED. Legal transitions:
+  ACCEPTED -> QUEUED | REJECTED;
+  QUEUED -> STARTING | CANCEL_REQUESTED | CANCELLED | INTERRUPTED;
+  STARTING -> RUNNING | CANCEL_REQUESTED | FAILED | CANCELLED | TIMED_OUT | INTERRUPTED;
+  RUNNING -> CANCEL_REQUESTED | SUCCEEDED | FAILED | CANCELLED | TIMED_OUT | INTERRUPTED;
+  CANCEL_REQUESTED -> CANCELLED | SUCCEEDED | FAILED | TIMED_OUT | INTERRUPTED.
+  Terminal states have no outgoing transitions. Exactly one terminal state wins a race.
+  This is a frozen future Job contract, not an instruction to implement Jobs in Phase A.
+
+### 14.7 Signing and Phase A verification
+
+Debug builds use the standard per-user Android debug keystore; both APKs must be built
+under the same Windows user to share that certificate. Release builds should use the same
+organization-controlled signing certificate. If separate release certificates are
+unavoidable, signature permission must remain in place and explicit user-mediated pairing
+is mandatory before access; never downgrade the permission to normal or dangerous.
+
+The cross-project parity test is python tools/verify-ipc-v2-contract.py from the bridge
+repository. Runtime Robolectric tests exercise Parcelable round trips. Device-only
+binding, denial, service-death, and negative handshake scenarios remain separate exit
+criteria and must be recorded with device/API/build/signing details.

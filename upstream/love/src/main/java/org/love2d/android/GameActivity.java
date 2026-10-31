@@ -101,13 +101,19 @@ public class GameActivity extends SDLActivity {
     private final ServiceConnection runtimeConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
+            Log.i("LoveBridge", "onServiceConnected component=" + name
+                    + " binderAlive=" + service.isBinderAlive());
             bridgeMainHandler.removeCallbacks(bridgeConnectionTimeout);
             runtimeService = IProtocolBootstrap.Stub.asInterface(service);
             updateBridgeStatus("Lua Runtime: connected · checking API…");
             final IProtocolBootstrap connectedService = runtimeService;
             bridgeExecutor.execute(() -> {
+                String stage = "getProtocolInfo";
                 try {
+                    Log.d("LoveBridge", "Requesting ProtocolInfo");
                     ProtocolInfo protocolInfo = connectedService.getProtocolInfo();
+                    Log.i("LoveBridge", "getProtocolInfo OK namespace=" + protocolInfo.namespace
+                            + " protocol=" + protocolInfo.protocolMajor + "." + protocolInfo.protocolMinor);
                     if (!"com.bombless.luaandroid.ipc.v2".equals(protocolInfo.namespace)
                             || protocolInfo.protocolMajor != RUNTIME_PROTOCOL_MAJOR) {
                         throw new IllegalStateException("Incompatible protocol major: " + protocolInfo.protocolMajor);
@@ -116,9 +122,17 @@ public class GameActivity extends SDLActivity {
                     hello.clientVersion = "love2d-runtime-bridge";
                     hello.buildId = "companion";
                     hello.nonce = java.util.UUID.randomUUID().toString();
+                    stage = "openSession";
+                    Log.d("LoveBridge", "Opening V2 session");
                     ISession session = connectedService.openSession(hello);
+                    stage = "getSessionInfo";
                     SessionInfo sessionInfo = session.getSessionInfo();
+                    stage = "getCapabilities";
                     int capabilityCount = session.getCapabilities().size();
+                    String sessionPrefix = sessionInfo.sessionId.substring(0, Math.min(8, sessionInfo.sessionId.length()));
+                    Log.i("LoveBridge", "V2 SESSION OK protocol=" + protocolInfo.protocolMajor + "."
+                            + protocolInfo.protocolMinor + " sessionPrefix=" + sessionPrefix
+                            + " capabilities=" + capabilityCount);
                     bridgeMainHandler.post(() -> {
                         if (runtimeService == connectedService) {
                             updateBridgeStatus("Lua Runtime: v" + protocolInfo.protocolMajor + "." + protocolInfo.protocolMinor
@@ -127,6 +141,7 @@ public class GameActivity extends SDLActivity {
                         }
                     });
                 } catch (RemoteException | RuntimeException error) {
+                    Log.w("LoveBridge", "V2 handshake failed at stage=" + stage, error);
                     bridgeMainHandler.post(() -> {
                         if (runtimeService == connectedService) {
                             runtimeService = null;
@@ -144,6 +159,7 @@ public class GameActivity extends SDLActivity {
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
+            Log.w("LoveBridge", "onServiceDisconnected component=" + name);
             runtimeService = null;
             updateBridgeStatus("Lua Runtime: disconnected · reconnecting…");
             bridgeMainHandler.postDelayed(bridgeConnectionTimeout, 10_000);
@@ -151,6 +167,7 @@ public class GameActivity extends SDLActivity {
 
         @Override
         public void onBindingDied(ComponentName name) {
+            Log.w("LoveBridge", "onBindingDied component=" + name);
             bridgeMainHandler.removeCallbacks(bridgeConnectionTimeout);
             runtimeService = null;
             if (runtimeBound) {
@@ -162,6 +179,7 @@ public class GameActivity extends SDLActivity {
 
         @Override
         public void onNullBinding(ComponentName name) {
+            Log.w("LoveBridge", "onNullBinding component=" + name);
             bridgeMainHandler.removeCallbacks(bridgeConnectionTimeout);
             runtimeService = null;
             if (runtimeBound) {
@@ -290,11 +308,17 @@ public class GameActivity extends SDLActivity {
         addContentView(overlay, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
+        Log.i("LoveBridge", "Status overlay added attached=" + (overlay.getWindowToken() != null)
+                + " labelParent=" + (label.getParent() != null)
+                + " labelVisibility=" + label.getVisibility());
     }
 
     private void updateBridgeStatus(String status) {
         if (bridgeStatusView != null) {
             bridgeStatusView.setText(status);
+            Log.d("LoveBridge", "Status updated: " + status
+                    + " attached=" + (bridgeStatusView.getWindowToken() != null)
+                    + " shown=" + bridgeStatusView.isShown());
         }
     }
 
@@ -310,7 +334,9 @@ public class GameActivity extends SDLActivity {
                 RUNTIME_PACKAGE,
                 "com.bombless.luaandroid.ipc.v2.RuntimeV2Service"));
         try {
+            Log.d("LoveBridge", "Binding Runtime service component=" + intent.getComponent());
             runtimeBound = bindService(intent, runtimeConnection, Context.BIND_AUTO_CREATE);
+            Log.i("LoveBridge", "bindService returned " + runtimeBound);
             if (!runtimeBound) {
                 bridgeMainHandler.removeCallbacks(bridgeConnectionTimeout);
                 updateBridgeStatus("Lua Runtime: not installed · tap to retry");
